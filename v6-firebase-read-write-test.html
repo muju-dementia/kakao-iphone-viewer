@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>v6 Firebase 인증·읽기·쓰기 테스트</title>
+<style>body{font-family:system-ui,-apple-system,sans-serif;background:#f5f7fb;color:#182338;max-width:650px;margin:auto;padding:20px;line-height:1.6}h1{font-size:1.45rem}.panel{background:white;border:1px solid #dbe2ec;border-radius:14px;padding:17px;margin:15px 0}button{border:0;border-radius:9px;padding:12px 15px;background:#175cd3;color:white;font-size:1rem;font-weight:700;margin:5px 5px 5px 0}button:disabled{opacity:.45}input{width:100%;box-sizing:border-box;padding:12px;border:1px solid #bdc8d9;border-radius:8px;font-size:1rem}.result{white-space:pre-wrap;overflow-wrap:anywhere;background:#eff3f8;border-radius:8px;padding:12px;min-height:40px}.hint{color:#58677d;font-size:.91rem}.ok{color:#087443}.bad{color:#ba2929}</style></head><body>
+<h1>v6 Firebase 실제 접속 테스트</h1>
+<p class="hint">v4 운영 지도는 변경하지 않습니다. 테스트 데이터는 <code>v6_test_visits/TEST-V6-001</code>에만 저장합니다. 비밀번호 및 토큰은 화면에 표시하거나 저장하지 않습니다.</p>
+<section class="panel"><h2>① v6 Firebase 로그인</h2><label for="pw">v6 테스트용 공동 비밀번호</label><input id="pw" type="password" autocomplete="off" spellcheck="false" placeholder="비밀번호 입력"><div><button id="login">로그인 및 Firebase 인증</button><button id="logout" disabled>테스트 로그아웃</button></div><div id="authResult" class="result" aria-live="polite">로그인 전</div></section>
+<section class="panel"><h2>② 테스트 데이터 저장 및 조회</h2><button id="write" disabled>방문완료 저장</button><button id="read" disabled>저장값 읽기</button><div id="dbResult" class="result" aria-live="polite">로그인 후 진행하세요.</div></section>
+<section class="panel"><h2>③ 세션 버전 확인</h2><button id="version">Worker 현재 버전 확인</button><div id="versionResult" class="result" aria-live="polite">아직 확인하지 않았습니다.</div><p class="hint">향후 버전 3으로 변경하는 테스트에서는 기존 로그인 상태에서 접근이 차단되는지 별도로 검증해야 합니다. Worker 버전 변경만으로 Firebase 권한이 즉시 철회되지는 않습니다.</p></section>
+<p class="hint">테스트 페이지는 Firebase 인증을 메모리에만 유지합니다. 새로고침하면 다시 로그인해야 합니다. 동일 브라우저의 v4 인증 저장소와 분리된 Firebase 앱 이름을 사용합니다.</p>
+<script type="module">
+import {initializeApp} from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js';
+import {getAuth,initializeAuth,inMemoryPersistence,signInWithCustomToken,signOut,getIdTokenResult} from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js';
+import {getDatabase,ref,set,get} from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-database.js';
+const config={apiKey:'AIzaSyB-wFAXdGQZ1Dhb1mX1KgUnKaD2hKY2wkg',authDomain:'muju-visit-map.firebaseapp.com',databaseURL:'https://muju-visit-map-default-rtdb.firebaseio.com',projectId:'muju-visit-map',storageBucket:'muju-visit-map.firebasestorage.app',messagingSenderId:'1023575587767',appId:'1:1023575587767:web:793d56f584e709a74f4632'};
+const worker='https://muju-visit-auth-v6-test.firstq.workers.dev';
+const app=initializeApp(config,'v6-firebase-test-isolated');
+const auth=initializeAuth(app,{persistence:inMemoryPersistence});
+const db=getDatabase(app), path='v6_test_visits/TEST-V6-001';
+const $=id=>document.getElementById(id);
+const display=(id,s,ok)=>{const e=$(id);e.textContent=s;e.className='result '+(ok===true?'ok':ok===false?'bad':'')};
+function ui(){const logged=!!auth.currentUser;$('write').disabled=!logged;$('read').disabled=!logged;$('logout').disabled=!logged;}
+async function responseJson(r){let data;try{data=await r.json()}catch{throw Error('JSON 응답이 아닙니다 (HTTP '+r.status+')')}if(!r.ok||data.ok!==true)throw Error('HTTP '+r.status+' '+(data.error||data.message||'요청 실패'));return data}
+$('login').onclick=async()=>{const b=$('login'),pw=$('pw');if(!pw.value){display('authResult','비밀번호를 입력하세요.',false);return}b.disabled=true;display('authResult','인증 중…');try{const d=await responseJson(await fetch(worker+'/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw.value}),cache:'no-store'}));if(typeof d.token!=='string')throw Error('로그인 토큰이 없습니다');const cred=await signInWithCustomToken(auth,d.token);const claims=(await getIdTokenResult(cred.user)).claims;const valid=/^muju-visit-[0-9a-f-]{36}$/.test(cred.user.uid)&&claims.visit_access===true&&Number(claims.session_version)===2;if(!valid){await signOut(auth);throw Error('UID 또는 버전 2 권한이 일치하지 않습니다')}display('authResult','✓ Firebase 실제 로그인 성공\n개별 UID 형식 정상\n세션 버전: '+claims.session_version+'\n방문 접근 권한: 정상',true)}catch(e){display('authResult','인증 실패: '+e.message,false)}finally{pw.value='';b.disabled=false;ui()}};
+$('write').onclick=async()=>{const b=$('write');b.disabled=true;display('dbResult','저장 중…');try{if(!auth.currentUser)throw Error('로그인 필요');await set(ref(db,path),{status:'completed',updatedAt:Date.now()});display('dbResult','✓ 저장 성공\n경로: '+path+'\n상태: completed',true)}catch(e){display('dbResult','저장 실패: '+e.message,false)}finally{ui()}};
+$('read').onclick=async()=>{const b=$('read');b.disabled=true;display('dbResult','조회 중…');try{if(!auth.currentUser)throw Error('로그인 필요');const snap=await get(ref(db,path));if(!snap.exists())throw Error('테스트 데이터가 없습니다. 먼저 저장하세요.');const d=snap.val();display('dbResult','✓ 조회 성공\n상태: '+String(d.status)+'\n저장 시각(ms): '+String(d.updatedAt)+'\n'+(d.status==='completed'?'✓ 방문완료 상태 일치':'⚠ 예상 상태와 다릅니다'),d.status==='completed')}catch(e){display('dbResult','조회 실패: '+e.message,false)}finally{ui()}};
+$('version').onclick=async()=>{const b=$('version');b.disabled=true;display('versionResult','확인 중…');try{const d=await responseJson(await fetch(worker+'/session',{cache:'no-store'}));display('versionResult','✓ Worker 현재 세션 버전: '+String(d.session_version),d.session_version===2)}catch(e){display('versionResult','확인 실패: '+e.message,false)}finally{b.disabled=false}};
+$('logout').onclick=async()=>{try{await signOut(auth);display('authResult','로그아웃 완료',true)}catch(e){display('authResult','로그아웃 실패: '+e.message,false)}ui()};
+ui();
+</script></body></html>
