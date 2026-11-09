@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>공동 방문관리 지도 - 가상 데이터 동기화 테스트</title>
+<style>
+:root{font-family:system-ui,-apple-system,'Malgun Gothic',sans-serif;color:#172332;background:#f5f7fa}body{margin:0;padding:24px 14px}.wrap{max-width:580px;margin:auto}h1{font-size:1.35rem}p{line-height:1.6}.panel{background:white;border:1px solid #e1e6eb;border-radius:14px;padding:18px;margin:14px 0}label{display:block;font-weight:650;margin-bottom:8px}input{font:inherit;box-sizing:border-box;width:100%;padding:12px;border:1px solid #9eacba;border-radius:8px}button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:10px 14px;background:#2456a6;color:white}button:disabled{opacity:.5;cursor:wait}.secondary{background:#e8edf3;color:#223348}.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid #e9edf2}.row:first-child{border-top:0}.muted{color:#526174;font-size:.9rem}.status{white-space:pre-wrap;overflow-wrap:anywhere;background:#f0f4f8;border-radius:8px;padding:12px;margin-top:12px}.hidden{display:none}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.pill{display:inline-block;padding:4px 9px;border-radius:20px;background:#e7e9ed;font-size:.83rem}.yes{background:#d8f4e4;color:#12603c}.no{background:#ffe7e5;color:#8b302c}</style>
+</head>
+<body><main class="wrap">
+<h1>공동 방문관리 · 실시간 동기화 테스트</h1>
+<p class="muted">가상 PK 3개만 사용합니다. 주민 주소·좌표·실제 PK를 입력하지 마세요. 같은 공통 비밀번호로 로그인한 다른 기기에서도 변경 사항이 표시됩니다.</p>
+<section class="panel" id="loginPanel"><label for="password">공통 비밀번호</label><input id="password" type="password" autocomplete="off" placeholder="공통 비밀번호 입력"><div class="actions"><button id="loginBtn">로그인</button></div></section>
+<section class="panel hidden" id="dataPanel"><p><strong>Firebase 로그인 완료</strong> <span class="pill yes">연결됨</span></p><p class="muted">테스트용 데이터베이스 경로: <code>test_visits</code></p><div id="rows"><p>실시간 데이터 연결 중...</p></div><div class="actions"><button id="logoutBtn" class="secondary">로그아웃</button></div></section>
+<div class="status" id="status" role="status" aria-live="polite">로그인 대기 중</div>
+<p class="muted">테스트 완료 후에는 이 페이지를 GitHub에서 삭제하고, Firebase의 <code>test_visits</code> 데이터를 정리하세요. 실제 운영 규칙은 별도로 설계해야 합니다.</p>
+</main>
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+import { getAuth, signInWithCustomToken, signOut, onAuthStateChanged, setPersistence, inMemoryPersistence } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+import { getDatabase, ref, onValue, set, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js';
+const firebaseConfig = {
+  apiKey: 'AIzaSyB-wFAXdGQZ1Dhb1mX1KgUnKaD2hKY2wkg',
+  authDomain: 'muju-visit-map.firebaseapp.com',
+  databaseURL: 'https://muju-visit-map-default-rtdb.firebaseio.com',
+  projectId: 'muju-visit-map',
+  storageBucket: 'muju-visit-map.firebasestorage.app',
+  messagingSenderId: '1023575587767',
+  appId: '1:1023575587767:web:793d56f584e709a74f4632'
+};
+const WORKER = 'https://muju-visit-auth.firstq.workers.dev/login';
+const PKS = ['TEST-001','TEST-002','TEST-003'];
+const app=initializeApp(firebaseConfig), auth=getAuth(app), db=getDatabase(app);
+const $=id=>document.getElementById(id);
+const status=message=>{$('status').textContent=message;};
+let unsubscribe=null, latest={};
+function draw(){
+  const host=$('rows');host.replaceChildren();
+  for(const pk of PKS){
+    const record=latest[pk]||{};
+    const completed=record.completed===true;
+    const row=document.createElement('div');row.className='row';
+    const info=document.createElement('div');
+    const name=document.createElement('strong');name.textContent=pk;
+    const br=document.createElement('br');
+    const pill=document.createElement('span');pill.className='pill '+(completed?'yes':'no');pill.textContent=completed?'방문 완료':'미방문';
+    info.append(name,br,pill);
+    const btn=document.createElement('button');btn.className=completed?'secondary':'';btn.textContent=completed?'미방문으로 변경':'방문 완료';
+    btn.onclick=async()=>{
+      btn.disabled=true;
+      try{
+        await set(ref(db,'test_visits/'+pk),{completed:!completed,updatedAt:serverTimestamp()});
+        status(pk+' 상태 저장 완료. 다른 기기의 화면을 확인하세요.');
+      }catch(err){status('저장 실패: '+(err.code||err.message));}
+      finally{btn.disabled=false;}
+    };
+    row.append(info,btn);host.append(row);
+  }
+}
+function showLoggedIn(user){
+  $('loginPanel').classList.add('hidden');$('dataPanel').classList.remove('hidden');
+  status('Firebase 로그인 성공: '+user.uid+'\n실시간 데이터 연결 중...');
+  if(unsubscribe)unsubscribe();
+  unsubscribe=onValue(ref(db,'test_visits'),snap=>{
+    latest=snap.val()||{};draw();status('실시간 연결 정상 · 데이터 변경이 자동 반영됩니다.');
+  },err=>status('데이터베이스 읽기 실패: '+(err.code||err.message)));
+}
+function showLoggedOut(){
+  if(unsubscribe){unsubscribe();unsubscribe=null;}
+  latest={};$('loginPanel').classList.remove('hidden');$('dataPanel').classList.add('hidden');
+  status('로그인 대기 중');
+}
+$('loginBtn').onclick=async()=>{
+  const password=$('password').value;
+  if(!password){status('비밀번호를 입력하세요.');return;}
+  $('loginBtn').disabled=true;status('인증 중...');
+  try{
+    await setPersistence(auth,inMemoryPersistence);
+    const response=await fetch(WORKER,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password}),cache:'no-store'});
+    const result=await response.json();
+    if(!response.ok||!result.token)throw new Error(result.error||('HTTP '+response.status));
+    await signInWithCustomToken(auth,result.token);
+    $('password').value='';
+  }catch(err){status('로그인 실패: '+(err.code||err.message));}
+  finally{$('loginBtn').disabled=false;}
+};
+$('password').addEventListener('keydown',e=>{if(e.key==='Enter')$('loginBtn').click();});
+$('logoutBtn').onclick=async()=>{try{await signOut(auth);}catch(err){status('로그아웃 실패: '+err.message);}};
+onAuthStateChanged(auth,user=>user?showLoggedIn(user):showLoggedOut());
+</script>
+</body></html>
