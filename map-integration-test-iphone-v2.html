@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>공동 방문관리 지도 · 통합 테스트</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;height:100%;font-family:system-ui,-apple-system,sans-serif;color:#17243a}body{display:flex;flex-direction:column;background:#f4f7fb}header{background:#182e50;color:white;padding:12px 14px;font-weight:700;display:flex;justify-content:space-between;gap:8px;align-items:center}main{flex:1;min-height:0;display:flex;flex-direction:column}.controls{padding:9px;background:#fff;display:flex;flex-wrap:wrap;gap:7px;align-items:end;border-bottom:1px solid #ddd}label{font-size:12px;display:flex;flex-direction:column;gap:4px}input,button{font:inherit;font-size:14px;padding:9px;border:1px solid #ccd4e0;border-radius:7px;max-width:100%}button{border:0;background:#1768d4;color:#fff;cursor:pointer}button:disabled{opacity:.5}.secondary{background:#536579}.danger{background:#b63333}#map{flex:1;min-height:240px;background:#e5e9ee}#status{font-size:12px;padding:6px 12px;background:#fff;white-space:pre-wrap}#status.error{color:#b02020}.note{font-size:11px;color:#5d6c7e;margin:0;padding:0 12px 7px;background:#fff}#count{font-size:12px;color:#e5edf9}.hide{display:none!important}.popup{padding:12px;min-width:190px;max-width:270px;max-height:240px;overflow:auto;background:#fff;font-size:13px}.popup .pkrow{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0;padding-bottom:6px;border-bottom:1px solid #eee}.popup .pkrow button{font-size:12px;padding:7px}.popup .pkrow{display:block}.popup .pk{display:block;margin-bottom:7px}.popup .state-buttons{display:flex;gap:5px}.popup .state-button{flex:1;min-width:0;padding:8px 4px;font-size:12px;font-weight:600;border:2px solid transparent;border-radius:7px;background:#f2f4f7;color:#344054;white-space:nowrap}.popup .state-button[data-state="unvisited"].active{border-color:#d32f2f;background:#fff1f1;color:#b91c1c}.popup .state-button[data-state="absent"].active{border-color:#e99500;background:#fff8e8;color:#925d00}.popup .state-button[data-state="completed"].active{border-color:#178b47;background:#edf9f1;color:#116b35}.popup .state-button:disabled{opacity:.55}.popup{min-width:245px;max-width:300px;max-height:300px}.popup .pk{font-weight:700;overflow-wrap:anywhere}.legend{font-size:12px;background:#fff;padding:6px 12px;display:flex;gap:12px;flex-wrap:wrap}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}#loginPanel{background:#eaf2ff}#searchPanel{background:#fff}
+</style></head><body><header><span>공동 방문관리 지도 <small>(가상 데이터 테스트)</small></span><span id="count">데이터 미로드</span></header><main>
+<div id="loginPanel" class="controls"><label>공통 비밀번호<input id="sharedPassword" type="password" autocomplete="off" placeholder="공통 비밀번호"></label><button id="login">공동 로그인</button><button id="logout" class="secondary" disabled>로그아웃</button><span id="authState" style="font-size:12px">로그인 필요</span></div>
+<div class="controls" id="loadPanel"><label>카카오 JavaScript 키<input id="key" autocomplete="off" placeholder="JavaScript 키"></label><label>암호화된 테스트 .pinmap 파일<input id="file" type="file" ></label><label>파일 암호<input id="password" type="password" autocomplete="off" placeholder="파일 암호"></label><button id="open">지도 열기</button><button id="close" class="secondary hide">데이터 닫기</button></div>
+<div class="controls" id="searchPanel"><label>PK 검색<input id="search" placeholder="TEST-001"></label><button id="find">검색</button><button id="gps" class="secondary">현재 위치</button></div>
+<div class="legend"><span><i class="dot" style="background:#d32f2f"></i>미방문</span><span><i class="dot" style="background:#e99500"></i>부재</span><span><i class="dot" style="background:#178b47"></i>방문완료</span><span><i class="dot" style="background:#6954b6"></i>동일 좌표·혼합 상태</span></div>
+<div id="status">공동 로그인 후 가상 PK가 포함된 암호화 파일을 열어주세요.</div><p class="note">실제 주민 PK·주소·좌표를 사용하지 마세요. 이 페이지는 보안·승인 전 통합 테스트 전용입니다. 좌표 파일은 서버로 업로드하지 않지만 카카오 SDK는 외부 코드입니다.</p><div id="map"></div></main>
+<script type="module">
+import {initializeApp} from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js';
+import {getAuth,signInWithCustomToken,signOut,onAuthStateChanged} from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js';
+import {getDatabase,ref,onValue,runTransaction} from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-database.js';
+const firebaseConfig={apiKey:'AIzaSyB-wFAXdGQZ1Dhb1mX1KgUnKaD2hKY2wkg',authDomain:'muju-visit-map.firebaseapp.com',databaseURL:'https://muju-visit-map-default-rtdb.firebaseio.com',projectId:'muju-visit-map',storageBucket:'muju-visit-map.firebasestorage.app',messagingSenderId:'1023575587767',appId:'1:1023575587767:web:793d56f584e709a74f4632'};
+const WORKER='https://muju-visit-auth.firstq.workers.dev/login';
+const DB_PATH='integration_test_visits'; // 가상 PK 테스트 전용
+const app=initializeApp(firebaseConfig),auth=getAuth(app),db=getDatabase(app);
+const $=id=>document.getElementById(id);
+const COLORS={unvisited:'#d32f2f',absent:'#e99500',completed:'#178b47',mixed:'#6954b6'};
+const LABELS={unvisited:'미방문',absent:'부재',completed:'방문완료'};
+const STATE_ORDER=['unvisited','absent','completed'];
+let map=null,markers=[],iw=null,points=[],groups=[],statuses={},unsubscribe=null,geoMarker=null,loggedIn=false,selectedGroup=null;
+function msg(t,error=false){$('status').textContent=t;$('status').className=error?'error':'';}
+function validPk(pk){return /^TEST-[A-Za-z0-9_-]{1,30}$/.test(pk)}
+function unb64(str){const bin=atob(str),arr=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);return arr}
+async function decrypt(file,password){if(file.format!=='private-pin-map'||file.version!==1||file.kdf!=='PBKDF2-SHA256'||file.cipher!=='AES-256-GCM'||file.iterations!==310000)throw Error('지원하지 않는 파일 형식입니다.');const enc=new TextEncoder(),salt=unb64(file.salt),iv=unb64(file.iv),data=unb64(file.data);if(salt.length!==16||iv.length!==12||data.length<16||data.length>10000000)throw Error('파일 형식이 올바르지 않습니다.');const material=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveKey']);const key=await crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:310000,hash:'SHA-256'},material,{name:'AES-GCM',length:256},false,['decrypt']);const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv},key,data);const parsed=JSON.parse(new TextDecoder().decode(plain));if(parsed.version!==1||!Array.isArray(parsed.points)||parsed.points.length>10000)throw Error('좌표 데이터 형식이 올바르지 않습니다.');return parsed.points.filter(p=>typeof p.pk==='string'&&validPk(p.pk)&&Number.isFinite(p.lat)&&Number.isFinite(p.lng)&&Math.abs(p.lat)<=90&&Math.abs(p.lng)<=180)}
+function sdk(key){return new Promise((resolve,reject)=>{if(window.kakao?.maps){kakao.maps.load(resolve);return}const s=document.createElement('script');s.src='https://dapi.kakao.com/v2/maps/sdk.js?appkey='+encodeURIComponent(key)+'&autoload=false';s.onload=()=>window.kakao?.maps?kakao.maps.load(resolve):reject(Error('카카오 SDK 초기화 실패'));s.onerror=()=>reject(Error('카카오 SDK 연결 실패'));document.head.appendChild(s)})}
+function markerImage(color){const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="34" height="46" viewBox="0 0 34 46"><path d="M17 2C8 2 2 9 2 18c0 11 15 26 15 26s15-15 15-26C32 9 26 2 17 2Z" fill="${color}" stroke="white" stroke-width="2"/><circle cx="17" cy="17" r="6" fill="white"/></svg>`;return new kakao.maps.MarkerImage('data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg),new kakao.maps.Size(34,46),{offset:new kakao.maps.Point(17,44)})}
+function groupColor(g){const set=new Set(g.pks.map(pk=>statuses[pk]?.status||'unvisited'));return set.size===1?COLORS[[...set][0]]:COLORS.mixed}
+function refreshMarkers(){for(const g of groups){g.marker.setImage(markerImage(groupColor(g)))}if(selectedGroup)renderPopup(selectedGroup)}
+function closePopup(){if(iw)iw.close();selectedGroup=null}
+function renderPopup(g){
+ if(!iw||!map||selectedGroup!==g)return;
+ const box=document.createElement('div');box.className='popup';
+ // 정보창 내부 버튼 클릭은 지도 빈 공간 클릭으로 취급하지 않는다.
+ box.addEventListener('click',e=>e.stopPropagation());
+ box.addEventListener('touchend',e=>e.stopPropagation());
+ const title=document.createElement('strong');title.textContent=g.pks.length===1?g.pks[0]:g.pks.length+'개 PK (동일 위치)';box.appendChild(title);
+ for(const pk of g.pks){
+  const row=document.createElement('div');row.className='pkrow';
+  const text=document.createElement('span');text.className='pk';
+  const current=STATE_ORDER.includes(statuses[pk]?.status)?statuses[pk].status:'unvisited';
+  text.textContent=(g.pks.length===1?'현재 상태: ':pk+' · ')+LABELS[current];
+  row.appendChild(text);
+  const actions=document.createElement('div');actions.className='state-buttons';
+  for(const state of STATE_ORDER){
+   const btn=document.createElement('button');btn.type='button';
+   btn.className='state-button'+(state===current?' active':'');
+   btn.dataset.state=state;btn.textContent=(state===current?'✓ ':'')+LABELS[state];
+   btn.disabled=!loggedIn||state===current;
+   btn.setAttribute('aria-pressed',String(state===current));
+   btn.onclick=async e=>{
+    e.stopPropagation();
+    if(state===current)return;
+    actions.querySelectorAll('button').forEach(b=>b.disabled=true);
+    await changeStatus(pk,state);
+   };
+   actions.appendChild(btn);
+  }
+  row.appendChild(actions);box.appendChild(row);
+ }
+ iw.setContent(box);iw.open(map,g.marker);
+}
+async function changeStatus(pk,target){
+ if(!loggedIn||!validPk(pk)||!STATE_ORDER.includes(target))return;
+ try{
+  const result=await runTransaction(ref(db,DB_PATH+'/'+pk),current=>{
+   if(current?.status===target)return;
+   return {status:target,updatedAt:Date.now()};
+  },{applyLocally:false});
+  if(result.committed)msg(pk+' → '+LABELS[target]+' 저장 완료');
+  else msg(pk+'의 상태가 이미 '+LABELS[target]+'입니다.');
+ }catch(e){msg('상태 변경 실패: '+e.message,true);if(selectedGroup)renderPopup(selectedGroup)}
+}
+function clearMap(){markers.forEach(m=>m.setMap(null));markers=[];groups=[];points=[];selectedGroup=null;if(iw)iw.close();$('count').textContent='데이터 미로드'}
+function draw(items){clearMap();points=items;map=map||new kakao.maps.Map($('map'),{center:new kakao.maps.LatLng(36,127.66),level:10});iw=iw||new kakao.maps.InfoWindow({removable:false});kakao.maps.event.addListener(map,'click',()=>closePopup());const grouped=new Map(),bounds=new kakao.maps.LatLngBounds();for(const p of points){const key=p.lat.toFixed(7)+','+p.lng.toFixed(7);if(!grouped.has(key))grouped.set(key,[]);grouped.get(key).push(p.pk)}for(const [coord,pks] of grouped){const [lat,lng]=coord.split(',').map(Number),position=new kakao.maps.LatLng(lat,lng);const marker=new kakao.maps.Marker({map,position,title:pks.join(', '),image:markerImage(COLORS.unvisited)});const g={pks,marker};groups.push(g);markers.push(marker);bounds.extend(position);kakao.maps.event.addListener(marker,'click',()=>{selectedGroup=g;renderPopup(g)})}if(markers.length===1){map.setCenter(markers[0].getPosition());map.setLevel(4)}else if(markers.length>1)map.setBounds(bounds);$('count').textContent=points.length+'건 / '+markers.length+'개 핀';refreshMarkers();setTimeout(()=>map.relayout(),150)}
+function listen(){if(unsubscribe){unsubscribe();unsubscribe=null}if(!loggedIn)return;unsubscribe=onValue(ref(db,DB_PATH),snapshot=>{statuses=snapshot.val()||{};refreshMarkers();msg('실시간 동기화 연결됨 · '+new Date().toLocaleTimeString('ko-KR'))},error=>msg('동기화 오류: '+error.message,true))}
+onAuthStateChanged(auth,user=>{loggedIn=!!user;$('authState').textContent=user?'로그인됨 ('+user.uid+')':'로그인 필요';$('logout').disabled=!user;$('login').disabled=!!user;if(user)listen();else{if(unsubscribe){unsubscribe();unsubscribe=null}statuses={};refreshMarkers()}});
+$('login').onclick=async()=>{const password=$('sharedPassword').value;if(!password)return msg('공통 비밀번호를 입력하세요.',true);$('login').disabled=true;try{const res=await fetch(WORKER,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password}),cache:'no-store'});const data=await res.json();if(!res.ok||!data.token)throw Error(res.status===429?'요청이 너무 많습니다. 잠시 후 다시 시도하세요.':data.error||'로그인 실패');await signInWithCustomToken(auth,data.token);msg('Firebase 로그인 성공. 가상 테스트 파일을 열어주세요.')}catch(e){msg('로그인 실패: '+e.message,true)}finally{$('sharedPassword').value='';$('login').disabled=loggedIn}};
+$('logout').onclick=async()=>{try{await signOut(auth);clearMap();msg('로그아웃했습니다.')}catch(e){msg('로그아웃 실패: '+e.message,true)}};
+$('open').onclick=async()=>{if(!loggedIn)return msg('공동 로그인이 먼저 필요합니다.',true);const key=$('key').value.trim(),pass=$('password').value,upload=$('file').files?.[0];if(!key||!pass||!upload)return msg('키, 테스트 파일, 파일 암호를 모두 입력하세요.',true);$('open').disabled=true;try{msg('테스트 파일 복호화 중...');const file=JSON.parse(await upload.text());const items=await decrypt(file,pass);if(!items.length)throw Error('TEST- 형식의 가상 PK가 없습니다.');if(new Set(items.map(p=>p.pk)).size!==items.length)throw Error('PK 중복이 있습니다.');await sdk(key);draw(items);$('close').classList.remove('hide');msg('핀을 눌러 3가지 상태 중 하나를 선택하세요. 지도 빈 공간을 누르면 정보창이 닫힙니다.')}catch(e){msg('열기 실패: '+(e.name==='OperationError'?'파일 암호가 틀렸거나 파일이 손상되었습니다.':e.message),true)}finally{$('password').value='';$('open').disabled=false}};
+$('close').onclick=()=>{clearMap();$('close').classList.add('hide');msg('지도 데이터를 닫았습니다.')};
+$('find').onclick=()=>{const pk=$('search').value.trim();const g=groups.find(g=>g.pks.includes(pk));if(!g)return msg('해당 PK를 지도에서 찾을 수 없습니다.',true);map.setCenter(g.marker.getPosition());map.setLevel(3);selectedGroup=g;renderPopup(g)};
+$('search').addEventListener('keydown',e=>{if(e.key==='Enter')$('find').click()});
+$('gps').onclick=()=>{if(!map)return msg('먼저 지도를 열어주세요.',true);if(!navigator.geolocation)return msg('이 브라우저는 GPS를 지원하지 않습니다.',true);navigator.geolocation.getCurrentPosition(pos=>{const ll=new kakao.maps.LatLng(pos.coords.latitude,pos.coords.longitude);if(geoMarker)geoMarker.setMap(null);geoMarker=new kakao.maps.Marker({map,position:ll,title:'현재 위치'});map.setCenter(ll);map.setLevel(4);msg('현재 위치를 표시했습니다.')},err=>msg('위치 확인 실패: '+err.message,true),{enableHighAccuracy:true,timeout:12000,maximumAge:0})};
+window.addEventListener('resize',()=>map&&setTimeout(()=>map.relayout(),100));
+</script></body></html>
